@@ -1,0 +1,93 @@
+#!/usr/bin/env python
+# -*- coding: utf-8 -*-
+
+import argparse
+import logging
+import sys
+
+import boto3
+from jinja2 import Environment
+
+from s3pypi.exceptions import S3PyPiError
+from s3pypi.package import Package
+
+__prog__ = 's3pypi-root-index'
+__version__ = '0.0.1'
+__description__ = 'Utility to generate a root index.html for S3PyPI repositories'
+
+INDEX_TEMPLATE = """<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <title>Package Index</title>
+</head>
+<body>
+{%- for package in packages | sort %}
+    <a href="{{ package | urlencode }}/">{{ package }}</a><br>
+{%- endfor %}
+</body>
+</html>
+"""
+
+logging.basicConfig()
+log = logging.getLogger()
+
+
+class Indexer:
+    def __init__(self, region, bucket, verbose=False):
+        self.region = region
+        self.bucket = bucket
+        self.verbose = verbose
+        self.s3 = boto3.resource("s3", region_name=region)
+
+    @property
+    def packages(self):
+        bucket = self.s3.Bucket(self.bucket)
+        packages = set()
+        for obj in bucket.objects.all():
+            if '/' not in obj.key:
+                continue
+            package = obj.key.split('/', 1)[0]
+            packages.add(package)
+        return sorted(packages)
+
+    @property
+    def template(self):
+        template = Environment().from_string(INDEX_TEMPLATE)
+        packages = self.packages
+        log.info('Found packages: %s', ', '.join(packages))
+        return template.render({"packages": packages})
+
+    def index(self):
+        index = self.s3.Object(self.bucket, "index.html")
+        index.put(
+            Body=self.template,
+            ContentType="text/html",
+            CacheControl="public, must-revalidate, proxy-revalidate, max-age=0",
+            ACL="public-read",
+        )
+
+
+def index(args):
+    indexer = Indexer(args.region, args.bucket)
+    indexer.index()
+
+
+def parse_args(args):
+    p = argparse.ArgumentParser(prog=__prog__, description=__description__)
+    p.add_argument("--bucket", required=True, help="S3 bucket")
+    p.add_argument("--region", help="AWS region")
+    p.add_argument("--verbose", action="store_true", help="Turn on verbose output.")
+    p.add_argument("--version", action="version", version=__version__)
+    return p.parse_args(args)
+
+
+def main(*args):
+    args = parse_args(args or sys.argv[1:])
+    if args.verbose:
+        log.setLevel(logging.INFO)
+    index(args)
+
+
+if __name__ == "__main__":
+    main()
