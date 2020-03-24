@@ -34,9 +34,10 @@ log = logging.getLogger()
 
 
 class Indexer:
-    def __init__(self, region, bucket, verbose=False):
+    def __init__(self, region, bucket, secret, verbose=False):
         self.region = region
         self.bucket = bucket
+        self.secret = secret
         self.verbose = verbose
         self.s3 = boto3.resource("s3", region_name=region)
 
@@ -47,7 +48,12 @@ class Indexer:
         for obj in bucket.objects.all():
             if '/' not in obj.key:
                 continue
-            package = obj.key.split('/', 1)[0]
+            if self.secret not in obj.key:
+                continue
+            if self.secret:
+                package = obj.key.split('/', 2)[1]
+            else:
+                package = obj.key.split('/', 1)[0]
             packages.add(package)
         return sorted(packages)
 
@@ -59,7 +65,11 @@ class Indexer:
         return template.render({"packages": packages})
 
     def index(self):
-        index = self.s3.Object(self.bucket, "index.html")
+        index_path = self.secret
+        if len(index_path) > 0 and not index_path.endswith('/'):
+            index_path += '/'
+        index_path += "index.html"
+        index = self.s3.Object(self.bucket, index_path)
         index.put(
             Body=self.template,
             ContentType="text/html",
@@ -69,13 +79,14 @@ class Indexer:
 
 
 def index(args):
-    indexer = Indexer(args.region, args.bucket)
+    indexer = Indexer(args.region, args.bucket, args.secret)
     indexer.index()
 
 
 def parse_args(args):
     p = argparse.ArgumentParser(prog=__prog__, description=__description__)
     p.add_argument("--bucket", required=True, help="S3 bucket")
+    p.add_argument("--secret", help="S3 secret", default="")
     p.add_argument("--region", help="AWS region")
     p.add_argument("--verbose", action="store_true", help="Turn on verbose output.")
     p.add_argument("--version", action="version", version=__version__)
